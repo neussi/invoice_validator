@@ -17,7 +17,8 @@ import 'screens/resultat_screen.dart';
 import 'screens/account_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/history_screen.dart';
-
+import 'screens/test_screen.dart';
+import 'screens/enhanced_test_screen.dart';
 // Import des services
 import 'services/ocr_service.dart';
 
@@ -54,6 +55,11 @@ class MyApp extends StatelessWidget {
           '/history': (context) => HistoryScreen(),
           '/account': (context) => AccountScreen(),
           '/settings': (context) => SettingsScreen(),
+          '/test': (context) => TestScreen(),
+          '/eneo_test': (context) => EnhancedTestScreen(),
+
+
+
         },
       ),
     );

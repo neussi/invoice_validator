@@ -2,7 +2,11 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:io';
-import '../services/ocr_service.dart';
+import 'package:provider/provider.dart';
+import '../services/enhanced_eneo_ocr_service.dart'; // ✅ Nouveau service ENEO
+import '../database.dart';
+import '../models.dart';
+import '../main.dart';
 
 class AnalyseScreen extends StatefulWidget {
   @override
@@ -21,8 +25,11 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
   String _currentStepText = 'Préparation de l\'image...';
   String? _imagePath;
   InvoiceData? _extractedData;
+  ValidationResult? _validationResult;
   bool _hasError = false;
   String _errorMessage = '';
+  String _detectedFormat = 'UNKNOWN';
+  double _ocrConfidence = 0.0;
   
   final List<String> _steps = [
     'Préparation de l\'image...',
@@ -37,7 +44,7 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
     super.initState();
     
     _progressController = AnimationController(
-      duration: Duration(seconds: 8),
+      duration: Duration(seconds: 12), // Augmenté pour la nouvelle validation
       vsync: this,
     );
     
@@ -82,7 +89,7 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
       final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
       if (args != null && args['imagePath'] != null) {
         _imagePath = args['imagePath'];
-        _startAnalysis();
+        _startEnhancedAnalysis();
       } else {
         _showError('Aucune image fournie');
       }
@@ -97,15 +104,24 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
     super.dispose();
   }
 
-  void _startAnalysis() async {
+  void _startEnhancedAnalysis() async {
     if (_imagePath == null) return;
+
+    final userProvider = Provider.of<UserProvider>(context, listen: false);
+    if (userProvider.currentUser == null) {
+      _showError('Utilisateur non connecté');
+      return;
+    }
 
     _pulseController.repeat(reverse: true);
     _progressController.forward();
     
     try {
-      // Étape 1: Préparation
-      await Future.delayed(Duration(milliseconds: 800));
+      print('🚀 Début de l\'analyse ENEO avancée');
+      print('📁 Chemin image: $_imagePath');
+      
+      // Étape 1: Préparation et validation de l'image
+      await Future.delayed(Duration(milliseconds: 1000));
       if (mounted) {
         setState(() {
           _currentStep = 1;
@@ -113,20 +129,36 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
         });
       }
 
-      // Étape 2: OCR réel
-      await Future.delayed(Duration(milliseconds: 1500));
+      // Vérifier que le fichier existe
+      File imageFile = File(_imagePath!);
+      if (!await imageFile.exists()) {
+        throw Exception('Fichier image introuvable');
+      }
+
+      // Étape 2: OCR avec détection automatique ENEO
+      await Future.delayed(Duration(milliseconds: 1200));
       if (mounted) {
         setState(() {
           _currentStep = 2;
-          _currentStepText = _steps[2];
+          _currentStepText = 'Analyse intelligente ENEO...';
         });
       }
 
-      // Traitement OCR réel
-      final ocrService = OCRService();
-      _extractedData = await ocrService.processInvoice(_imagePath!);
+      print('🔍 Initialisation du service OCR Enhanced ENEO');
+      
+      // ✅ Utilisation du nouveau service OCR ENEO
+      final enhancedOcrService = OCRService();
+      _extractedData = await enhancedOcrService.processInvoice(_imagePath!);
 
-      // Étape 3: Extraction
+      // Récupérer les informations du format détecté
+      _detectedFormat = _extractedData?.rawData['detected_format'] ?? 'UNKNOWN';
+      _ocrConfidence = _extractedData?.rawData['confidence'] ?? 0.0;
+
+      print('📊 Format détecté: $_detectedFormat');
+      print('🎯 Confiance OCR: ${(_ocrConfidence * 100).toInt()}%');
+      print('📄 Données extraites: ${_extractedData?.toMap()}');
+
+      // Étape 3: Validation des données extraites
       await Future.delayed(Duration(milliseconds: 1000));
       if (mounted) {
         setState(() {
@@ -135,8 +167,33 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
         });
       }
 
-      // Étape 4: Validation
-      await Future.delayed(Duration(milliseconds: 1200));
+      // Vérifier que des données ont été extraites
+      if (_extractedData == null) {
+        throw Exception('Aucune donnée extraite de la facture');
+      }
+
+      // Étape 4: Validation avec la base de données ENEO
+      await Future.delayed(Duration(milliseconds: 800));
+      if (mounted) {
+        setState(() {
+          _currentStepText = _detectedFormat == 'ENEO_CAMEROUN' 
+              ? 'Validation ENEO Cameroun...' 
+              : 'Validation générique...';
+        });
+      }
+
+      print('🏢 Début validation avec base de données');
+      
+      // ✅ Validation avancée avec les vraies données ENEO
+      _validationResult = await DatabaseHelper.instance.validateInvoice(_extractedData!);
+      
+      print('✅ Résultat validation: ${_validationResult?.status}');
+      print('🎯 Score validation: ${(_validationResult?.confidenceScore ?? 0 * 100).toInt()}%');
+      print('❌ Erreurs: ${_validationResult?.errors}');
+      print('⚠️  Avertissements: ${_validationResult?.warnings}');
+
+      // Étape 5: Finalisation
+      await Future.delayed(Duration(milliseconds: 1500));
       if (mounted) {
         setState(() {
           _currentStep = 4;
@@ -146,21 +203,26 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
 
       _pulseController.stop();
       
-      // Naviguer vers les résultats
-      await Future.delayed(Duration(milliseconds: 800));
+      print('🎉 Analyse terminée avec succès');
+      
+      // Naviguer vers les résultats avec toutes les données
+      await Future.delayed(Duration(milliseconds: 1000));
       if (mounted) {
         Navigator.pushReplacementNamed(
           context, 
           '/resultat',
           arguments: {
             'invoiceData': _extractedData,
+            'validationResult': _validationResult,
             'imagePath': _imagePath,
+            'detectedFormat': _detectedFormat,
+            'ocrConfidence': _ocrConfidence,
           },
         );
       }
 
     } catch (e) {
-      print('Erreur analyse: $e');
+      print('💥 Erreur analyse Enhanced: $e');
       _showError('Erreur lors de l\'analyse: ${e.toString()}');
     }
   }
@@ -172,18 +234,23 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
     });
     _pulseController.stop();
     _progressController.stop();
+    
+    print('❌ Erreur affichée: $message');
   }
 
   void _retryAnalysis() {
+    print('🔄 Redémarrage de l\'analyse');
     setState(() {
       _hasError = false;
       _errorMessage = '';
       _currentStep = 0;
       _currentStepText = _steps[0];
+      _detectedFormat = 'UNKNOWN';
+      _ocrConfidence = 0.0;
     });
     
     _progressController.reset();
-    _startAnalysis();
+    _startEnhancedAnalysis();
   }
 
   @override
@@ -207,7 +274,7 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
             opacity: _fadeAnimation,
             child: Column(
               children: [
-                // Header moderne
+                // Header moderne avec détection de format
                 Container(
                   padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                   child: Row(
@@ -231,16 +298,46 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
                         ),
                       ),
                       Expanded(
-                        child: Text(
-                          'Analyse intelligente',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 20,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.5,
-                          ),
-                          textAlign: TextAlign.center,
-                          overflow: TextOverflow.ellipsis,
+                        child: Column(
+                          children: [
+                            Text(
+                              _detectedFormat == 'ENEO_CAMEROUN' ? 'Analyse ENEO' : 'Analyse Intelligente',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.5,
+                              ),
+                              textAlign: TextAlign.center,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            if (_detectedFormat != 'UNKNOWN')
+                              Container(
+                                margin: EdgeInsets.only(top: 4),
+                                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: _detectedFormat == 'ENEO_CAMEROUN' 
+                                      ? Color(0xFF2196F3).withOpacity(0.2)
+                                      : Colors.white.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: _detectedFormat == 'ENEO_CAMEROUN' 
+                                        ? Color(0xFF2196F3)
+                                        : Colors.white.withOpacity(0.3),
+                                  ),
+                                ),
+                                child: Text(
+                                  _detectedFormat == 'ENEO_CAMEROUN' ? 'ENEO Cameroun' : 'Générique',
+                                  style: TextStyle(
+                                    color: _detectedFormat == 'ENEO_CAMEROUN' 
+                                        ? Color(0xFF2196F3)
+                                        : Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                       SizedBox(width: 44),
@@ -266,17 +363,17 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
   Widget _buildAnalysisView() {
     return ConstrainedBox(
       constraints: BoxConstraints(
-        minHeight: MediaQuery.of(context).size.height - 200, // Assure la hauteur minimale
+        minHeight: MediaQuery.of(context).size.height - 240, // Ajusté pour le header plus grand
       ),
       child: Column(
         children: [
-          SizedBox(height: 16), // Réduit de 20 à 16
+          SizedBox(height: 16),
           
-          // Image de la facture avec effet moderne
+          // Image de la facture avec effet moderne et indicateur de format
           if (_imagePath != null)
             Container(
-              width: 260, // Réduit de 280 à 260
-              height: 300, // Réduit de 320 à 300
+              width: 260,
+              height: 300,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(20),
                 boxShadow: [
@@ -286,7 +383,7 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
                     offset: Offset(0, 15),
                   ),
                   BoxShadow(
-                    color: Color(0xFF667eea).withOpacity(0.2),
+                    color: (_detectedFormat == 'ENEO_CAMEROUN' ? Color(0xFF2196F3) : Color(0xFF667eea)).withOpacity(0.2),
                     blurRadius: 30,
                     offset: Offset(0, 0),
                   ),
@@ -294,12 +391,12 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
               ),
               child: Stack(
                 children: [
-                  // Image réelle avec bordure
+                  // Image réelle avec bordure colorée selon le format
                   Container(
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
-                        color: Colors.white.withOpacity(0.1),
+                        color: (_detectedFormat == 'ENEO_CAMEROUN' ? Color(0xFF2196F3) : Colors.white).withOpacity(0.3),
                         width: 2,
                       ),
                     ),
@@ -314,7 +411,7 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
                     ),
                   ),
                   
-                  // Overlay de scan animé amélioré
+                  // Overlay de scan animé adapté au format
                   AnimatedBuilder(
                     animation: _progressAnimation,
                     builder: (context, child) {
@@ -328,15 +425,15 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
                             gradient: LinearGradient(
                               colors: [
                                 Colors.transparent,
-                                Color(0xFF667eea),
-                                Color(0xFF764ba2),
+                                _detectedFormat == 'ENEO_CAMEROUN' ? Color(0xFF2196F3) : Color(0xFF667eea),
+                                _detectedFormat == 'ENEO_CAMEROUN' ? Color(0xFF1976D2) : Color(0xFF764ba2),
                                 Colors.transparent,
                               ],
                             ),
                             borderRadius: BorderRadius.circular(2),
                             boxShadow: [
                               BoxShadow(
-                                color: Color(0xFF667eea).withOpacity(0.6),
+                                color: (_detectedFormat == 'ENEO_CAMEROUN' ? Color(0xFF2196F3) : Color(0xFF667eea)).withOpacity(0.6),
                                 blurRadius: 15,
                                 spreadRadius: 2,
                               ),
@@ -347,7 +444,7 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
                     },
                   ),
                   
-                  // Indicateur de progression dans le coin
+                  // Indicateur de progression avec confiance OCR
                   Positioned(
                     top: 16,
                     right: 16,
@@ -361,34 +458,71 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
                         border: Border.all(color: Colors.white.withOpacity(0.2)),
                       ),
                       child: Text(
-                        '${((_currentStep + 1) / _steps.length * 100).toInt()}%',
+                        _ocrConfidence > 0 
+                            ? '${((_currentStep + 1) / _steps.length * 100).toInt()}% • ${(_ocrConfidence * 100).toInt()}%'
+                            : '${((_currentStep + 1) / _steps.length * 100).toInt()}%',
                         style: TextStyle(
                           color: Colors.white,
-                          fontSize: 12,
+                          fontSize: 11,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
                   ),
+                  
+                  // Badge ENEO si détecté
+                  if (_detectedFormat == 'ENEO_CAMEROUN')
+                    Positioned(
+                      top: 16,
+                      left: 16,
+                      child: Container(
+                        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Color(0xFF2196F3),
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Color(0xFF2196F3).withOpacity(0.3),
+                              blurRadius: 8,
+                              offset: Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.business, color: Colors.white, size: 12),
+                            SizedBox(width: 4),
+                            Text(
+                              'ENEO',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
           
-          SizedBox(height: 32), // Réduit de 40 à 32
+          SizedBox(height: 32),
           
-          // Indicateur de progression circulaire amélioré
+          // Indicateur de progression circulaire adaptatif
           AnimatedBuilder(
             animation: _pulseAnimation,
             builder: (context, child) {
               return Transform.scale(
                 scale: _pulseAnimation.value,
                 child: Container(
-                  width: 100, // Réduit de 120 à 100
+                  width: 100,
                   height: 100,
                   child: Stack(
                     alignment: Alignment.center,
                     children: [
-                      // Cercle de fond
                       Container(
                         width: 100,
                         height: 100,
@@ -396,26 +530,25 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
                           shape: BoxShape.circle,
                           gradient: RadialGradient(
                             colors: [
-                              Color(0xFF667eea).withOpacity(0.1),
+                              (_detectedFormat == 'ENEO_CAMEROUN' ? Color(0xFF2196F3) : Color(0xFF667eea)).withOpacity(0.1),
                               Colors.transparent,
                             ],
                           ),
                         ),
                       ),
                       
-                      // Cercle de progression principal
                       SizedBox(
-                        width: 80, // Réduit de 100 à 80
+                        width: 80,
                         height: 80,
                         child: AnimatedBuilder(
                           animation: _progressAnimation,
                           builder: (context, child) {
                             return CircularProgressIndicator(
                               value: _progressAnimation.value,
-                              strokeWidth: 5, // Réduit de 6 à 5
+                              strokeWidth: 5,
                               backgroundColor: Colors.white.withOpacity(0.1),
                               valueColor: AlwaysStoppedAnimation<Color>(
-                                Color(0xFF667eea),
+                                _detectedFormat == 'ENEO_CAMEROUN' ? Color(0xFF2196F3) : Color(0xFF667eea),
                               ),
                               strokeCap: StrokeCap.round,
                             );
@@ -423,28 +556,31 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
                         ),
                       ),
                       
-                      // Icône centrale animée
                       Container(
-                        width: 50, // Réduit de 60 à 50
+                        width: 50,
                         height: 50,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           gradient: LinearGradient(
-                            colors: [Color(0xFF667eea), Color(0xFF764ba2)],
+                            colors: _detectedFormat == 'ENEO_CAMEROUN' 
+                                ? [Color(0xFF2196F3), Color(0xFF1976D2)]
+                                : [Color(0xFF667eea), Color(0xFF764ba2)],
                             begin: Alignment.topLeft,
                             end: Alignment.bottomRight,
                           ),
                           boxShadow: [
                             BoxShadow(
-                              color: Color(0xFF667eea).withOpacity(0.3),
+                              color: (_detectedFormat == 'ENEO_CAMEROUN' ? Color(0xFF2196F3) : Color(0xFF667eea)).withOpacity(0.3),
                               blurRadius: 15,
                               offset: Offset(0, 5),
                             ),
                           ],
                         ),
                         child: Icon(
-                          Icons.auto_awesome_rounded,
-                          size: 24, // Réduit de 28 à 24
+                          _currentStep >= 3 
+                              ? Icons.verified_rounded 
+                              : (_detectedFormat == 'ENEO_CAMEROUN' ? Icons.business : Icons.auto_awesome_rounded),
+                          size: 24,
                           color: Colors.white,
                         ),
                       ),
@@ -455,17 +591,17 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
             },
           ),
           
-          SizedBox(height: 24), // Réduit de 32 à 24
+          SizedBox(height: 24),
           
-          // Texte de l'étape actuelle avec animation
+          // Texte de l'étape actuelle
           Container(
-            height: 50, // Réduit de 60 à 50
+            height: 50,
             child: Center(
               child: Text(
                 _currentStepText,
                 style: TextStyle(
                   color: Colors.white,
-                  fontSize: 16, // Réduit de 18 à 16
+                  fontSize: 16,
                   fontWeight: FontWeight.w600,
                   letterSpacing: 0.5,
                 ),
@@ -476,9 +612,9 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
             ),
           ),
           
-          SizedBox(height: 20), // Réduit de 24 à 20
+          SizedBox(height: 20),
           
-          // Indicateurs d'étapes améliorés
+          // Indicateurs d'étapes colorés selon le format
           Container(
             padding: EdgeInsets.symmetric(horizontal: 20),
             child: Row(
@@ -495,14 +631,16 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
                   decoration: BoxDecoration(
                     gradient: isActive
                         ? LinearGradient(
-                            colors: [Color(0xFF667eea), Color(0xFF764ba2)],
+                            colors: _detectedFormat == 'ENEO_CAMEROUN' 
+                                ? [Color(0xFF2196F3), Color(0xFF1976D2)]
+                                : [Color(0xFF667eea), Color(0xFF764ba2)],
                           )
                         : null,
                     color: isActive ? null : Colors.white.withOpacity(0.2),
                     borderRadius: BorderRadius.circular(3),
                     boxShadow: isActive ? [
                       BoxShadow(
-                        color: Color(0xFF667eea).withOpacity(0.3),
+                        color: (_detectedFormat == 'ENEO_CAMEROUN' ? Color(0xFF2196F3) : Color(0xFF667eea)).withOpacity(0.3),
                         blurRadius: 8,
                         offset: Offset(0, 2),
                       ),
@@ -513,12 +651,12 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
             ),
           ),
           
-          SizedBox(height: 32), // Espace flexible
+          SizedBox(height: 32),
           
-          // Informations techniques améliorées
+          // Informations techniques enrichies
           Container(
-            margin: EdgeInsets.only(bottom: 24), // Espace de fin
-            padding: EdgeInsets.all(18), // Réduit de 20 à 18
+            margin: EdgeInsets.only(bottom: 24),
+            padding: EdgeInsets.all(18),
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 colors: [
@@ -541,10 +679,10 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
                     Expanded(
                       flex: 2,
                       child: Text(
-                        'IA utilisée:',
+                        'Technologie:',
                         style: TextStyle(
                           color: Colors.grey[400],
-                          fontSize: 13, // Réduit de 14 à 13
+                          fontSize: 13,
                           fontWeight: FontWeight.w500,
                         ),
                       ),
@@ -552,10 +690,10 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
                     Expanded(
                       flex: 3,
                       child: Text(
-                        'Google ML Kit OCR',
+                        _detectedFormat == 'ENEO_CAMEROUN' ? 'ENEO OCR Specialist' : 'Google ML Kit OCR',
                         style: TextStyle(
                           color: Colors.white,
-                          fontSize: 13, // Réduit de 14 à 13
+                          fontSize: 13,
                           fontWeight: FontWeight.w600,
                         ),
                         textAlign: TextAlign.right,
@@ -565,16 +703,16 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
                     ),
                   ],
                 ),
-                SizedBox(height: 10), // Réduit de 12 à 10
+                SizedBox(height: 10),
                 Row(
                   children: [
                     Expanded(
                       flex: 2,
                       child: Text(
-                        'Statut:',
+                        'Format:',
                         style: TextStyle(
                           color: Colors.grey[400],
-                          fontSize: 13, // Réduit de 14 à 13
+                          fontSize: 13,
                           fontWeight: FontWeight.w500,
                         ),
                       ),
@@ -589,20 +727,78 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
                             height: 8,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              color: _currentStep < _steps.length - 1 
-                                  ? Color(0xFFFF9800)
-                                  : Color(0xFF4CAF50),
+                              color: _detectedFormat == 'ENEO_CAMEROUN' 
+                                  ? Color(0xFF2196F3)
+                                  : (_detectedFormat == 'GENERIC' ? Color(0xFFFF9800) : Colors.grey),
                             ),
                           ),
                           SizedBox(width: 8),
                           Flexible(
                             child: Text(
-                              _currentStep < _steps.length - 1 ? 'En cours...' : 'Terminé',
+                              _detectedFormat == 'ENEO_CAMEROUN' 
+                                  ? 'ENEO Cameroun'
+                                  : (_detectedFormat == 'GENERIC' ? 'Générique' : 'Détection...'),
                               style: TextStyle(
-                                color: _currentStep < _steps.length - 1 
+                                color: _detectedFormat == 'ENEO_CAMEROUN' 
+                                    ? Color(0xFF2196F3)
+                                    : (_detectedFormat == 'GENERIC' ? Color(0xFFFF9800) : Colors.grey),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 2,
+                      child: Text(
+                        'Validation:',
+                        style: TextStyle(
+                          color: Colors.grey[400],
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      flex: 3,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: _currentStep < 3 
+                                  ? Color(0xFFFF9800)
+                                  : (_currentStep == 3 
+                                      ? Color(0xFF2196F3) 
+                                      : Color(0xFF4CAF50)),
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              _currentStep < 3 
+                                  ? 'En attente...' 
+                                  : (_currentStep == 3 
+                                      ? (_detectedFormat == 'ENEO_CAMEROUN' ? 'ENEO DB...' : 'Validation...') 
+                                      : 'Terminée'),
+                              style: TextStyle(
+                                color: _currentStep < 3 
                                     ? Color(0xFFFF9800)
-                                    : Color(0xFF4CAF50),
-                                fontSize: 13, // Réduit de 14 à 13
+                                    : (_currentStep == 3 
+                                        ? Color(0xFF2196F3) 
+                                        : Color(0xFF4CAF50)),
+                                fontSize: 13,
                                 fontWeight: FontWeight.w600,
                               ),
                               overflow: TextOverflow.ellipsis,
@@ -624,14 +820,13 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
   Widget _buildErrorView() {
     return ConstrainedBox(
       constraints: BoxConstraints(
-        minHeight: MediaQuery.of(context).size.height - 200,
+        minHeight: MediaQuery.of(context).size.height - 240,
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          // Icône d'erreur avec animation
           Container(
-            width: 80, // Réduit de 100 à 80
+            width: 80,
             height: 80,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
@@ -644,22 +839,22 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
             ),
             child: Icon(
               Icons.error_outline_rounded,
-              size: 50, // Réduit de 60 à 50
+              size: 50,
               color: Colors.red[400],
             ),
           ),
-          SizedBox(height: 24), // Réduit de 32 à 24
+          SizedBox(height: 24),
           
           Text(
             'Erreur d\'analyse',
             style: TextStyle(
               color: Colors.white,
-              fontSize: 22, // Réduit de 24 à 22
+              fontSize: 22,
               fontWeight: FontWeight.w700,
               letterSpacing: 0.5,
             ),
           ),
-          SizedBox(height: 12), // Réduit de 16 à 12
+          SizedBox(height: 12),
           
           Container(
             padding: EdgeInsets.symmetric(horizontal: 20),
@@ -667,77 +862,81 @@ class _AnalyseScreenState extends State<AnalyseScreen> with TickerProviderStateM
               _errorMessage,
               style: TextStyle(
                 color: Colors.grey[400],
-                fontSize: 15, // Réduit de 16 à 15
+                fontSize: 15,
                 height: 1.4,
                 fontWeight: FontWeight.w400,
               ),
               textAlign: TextAlign.center,
-              maxLines: 3, // Réduit de 4 à 3
-              overflow: TextOverflow.ellipsis,
             ),
           ),
-          SizedBox(height: 32), // Réduit de 48 à 32
           
-          // Boutons d'action améliorés
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: 20),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Container(
-                    height: 48, // Réduit de 50 à 48
-                    child: ElevatedButton.icon(
-                      onPressed: _retryAnalysis,
-                      icon: Icon(Icons.refresh_rounded, size: 18), // Réduit de 20 à 18
-                      label: Text(
-                        'Réessayer',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 15, // Réduit de 16 à 15
-                        ),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Color(0xFF667eea),
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        elevation: 0,
-                      ),
-                    ),
-                  ),
+          SizedBox(height: 32),
+          
+          // Bouton de nouvelle tentative
+          Container(
+            width: double.infinity,
+            margin: EdgeInsets.symmetric(horizontal: 20),
+            child: ElevatedButton.icon(
+              onPressed: _retryAnalysis,
+              icon: Icon(Icons.refresh_rounded, color: Colors.white),
+              label: Text(
+                'Réessayer',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
                 ),
-                SizedBox(width: 16),
-                Expanded(
-                  child: Container(
-                    height: 48,
-                    child: OutlinedButton.icon(
-                      onPressed: () => Navigator.pop(context),
-                      icon: Icon(Icons.arrow_back_rounded, size: 18),
-                      label: Text(
-                        'Retour',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 15,
-                        ),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        side: BorderSide(
-                          color: Colors.white.withOpacity(0.3),
-                          width: 1.5,
-                        ),
-                      ),
-                    ),
-                  ),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Color(0xFF667eea),
+                padding: EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
                 ),
-              ],
+                elevation: 8,
+                shadowColor: Color(0xFF667eea).withOpacity(0.3),
+              ),
             ),
           ),
-          SizedBox(height: 24), // Espace de fin
+          
+          SizedBox(height: 16),
+          
+          // Bouton retour à l'accueil
+          Container(
+            width: double.infinity,
+            margin: EdgeInsets.symmetric(horizontal: 20),
+            child: OutlinedButton.icon(
+              onPressed: () => Navigator.pushNamedAndRemoveUntil(
+                context, 
+                '/home', 
+                (route) => false,
+              ),
+              icon: Icon(
+                Icons.home_rounded, 
+                color: Colors.white.withOpacity(0.8),
+              ),
+              label: Text(
+                'Retour à l\'accueil',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.8),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              style: OutlinedButton.styleFrom(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                side: BorderSide(
+                  color: Colors.white.withOpacity(0.3),
+                  width: 2,
+                ),
+              ),
+            ),
+          ),
+          
+          SizedBox(height: 20),
         ],
       ),
     );
